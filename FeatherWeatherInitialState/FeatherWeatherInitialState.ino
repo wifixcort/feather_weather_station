@@ -82,8 +82,8 @@ Conecctions
 
 //-----------------Emoncms Configurations---------
 #define SERVER "insecure-groker.initialstate.com"
-#define ACCESS_KEY "LDwRk4tD7et0n7Y6f14POvomdARY7BmD"
-#define BUCKET_KEY "AKB33R64RG4R"
+#define ACCESS_KEY ""
+#define BUCKET_KEY ""
 
 
 //---------FONA network-------------
