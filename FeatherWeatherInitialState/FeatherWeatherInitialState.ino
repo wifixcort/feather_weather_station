@@ -62,11 +62,11 @@ Conecctions
 
 #include <Adafruit_SleepyDog.h>
 #include "Adafruit_FONA.h"
-#include "Adafruit_MQTT.h"//??
-#include "Adafruit_MQTT_FONA.h"//??
-#include <Wire.h>//??
+//#include "Adafruit_MQTT.h"//??
+//#include "Adafruit_MQTT_FONA.h"//??
+//#include <Wire.h>//??
 //#include <SPI.h>
-#include <SHT1x.h>//??
+//#include <SHT1x.h>//??
 #include "Adafruit_SI1145.h"
 #include <SparkFunBME280.h>
 
@@ -82,8 +82,8 @@ Conecctions
 
 //-----------------Emoncms Configurations---------
 #define SERVER "insecure-groker.initialstate.com"
-#define ACCESS_KEY "YOUR_ACCESS_KEY"
-#define BUCKET_KEY "YOUR_BUCKET_KEY"
+#define ACCESS_KEY "LDwRk4tD7et0n7Y6f14POvomdARY7BmD"
+#define BUCKET_KEY "AKB33R64RG4R"
 
 
 //---------FONA network-------------
@@ -191,13 +191,13 @@ int winddir_avg2m = 0; // [0-360 2 minute average wind direction]
 float windgustmph_10m = 0; // [mph past 10 minutes wind gust mph ]
 int windgustdir_10m = 0; // [0-360 past 10 minutes wind gust direction]
 
-#define MAX_TX_FAILURES      3  // Maximum number of publish failures in a row before resetting the whole sketch.
+#define MAX_TX_FAILURES      4  // Maximum number of publish failures in a row before resetting the whole sketch.
 
 uint8_t txFailures = 0;                                       // Count of how many publish failures have occured in a row.
 
 //------------------------------------------------
 
-uint32_t previousMillis_1 = 0;        // will store last time LED was updated
+uint32_t previousMillis_1 = 0;
 uint32_t previousMillis_2 = 0;
 uint32_t time_on = 1000;//
 uint32_t timer_on_fona_check = 1000;
@@ -280,7 +280,7 @@ void init_fona(){
   
   //APN configuration
   //fona.setGPRSNetworkSettings(F(FONA_APN), F(FONA_USERNAME), F(FONA_PASSWORD));
-  fona.setGPRSNetworkSettings(F("your_apn"), F(""), F(""));
+  fona.setGPRSNetworkSettings(F("kolbi3g"), F(""), F(""));
 
   #if defined(DEBUG)
   serial.println(F("Waiting 20s.."));
@@ -310,6 +310,7 @@ uint8_t check_fona(){
 }//end check_fona
 
 uint8_t check_connection(uint32_t &timer, uint32_t interval){
+  //noInterrupts();//<-------?????27/10/2016
   if(timer - previousMillis_2 > interval) {
     serial.println(F("Checking FONA connection"));
     if((!fona.GPRSstate())||(fona.getNetworkStatus() != 1)){
@@ -326,6 +327,7 @@ uint8_t check_connection(uint32_t &timer, uint32_t interval){
       serial.println(F("FONA connection state : ok"));
       previousMillis_2 = timer;
   }//end if
+  //interrupts();//<-------?????27/10/2016
 }//end check_connection
 
 void fona_on(){
@@ -439,6 +441,7 @@ void print_IMEI(void){
 
 void temporizer_1(uint32_t &timer, uint32_t interval){
   if((timer - previousMillis_1) > interval) {
+    //noInterrupts();//<-------?????27/10/2016
   //---------Temporized code here------------
 //  check_connection();
   BME280Read();
@@ -457,6 +460,8 @@ void temporizer_1(uint32_t &timer, uint32_t interval){
     if(send_url(String(GPSlocation)) == -1){
       serial.println("Problem sending GPS location data");
       txFailures++;
+    }else{
+      txFailures = 0;  
     }//end if    
   }//end if
 
@@ -471,7 +476,9 @@ void temporizer_1(uint32_t &timer, uint32_t interval){
   if(send_url(String(BME280Data)) == -1){
     serial.println("Problem sending BME280 data");
     txFailures++;
-  }//end if
+  }else{
+    txFailures = 0;  
+  }//end if    
   
   calcWeather();
   char weatherConditions[300];
@@ -480,16 +487,21 @@ void temporizer_1(uint32_t &timer, uint32_t interval){
   if(send_url(String(weatherConditions)) == -1){
     serial.println("Problem sending Weather Conditions");
     txFailures++;
-  }//end if
+  }else{
+    txFailures = 0;  
+  }//end if    
   
   String testMessage = "&battery="+String(fona_get_battery()) + lightSensorRead();
   if(send_url(testMessage) == -1){
-    serial.println("Problem sending to emoncms");
+    serial.println("Problem sending Battery State");
     txFailures++;
-  }
+  }else{
+    txFailures = 0;  
+  }//end if    
   //------------------------------
     previousMillis_1 = timer;
   }//end if
+  //interrupts();//<-------?????27/10/2016
 }//end temporizer
 
 void gpFIX(){
