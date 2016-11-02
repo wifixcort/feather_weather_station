@@ -55,20 +55,17 @@ Conecctions
   20         SDA
   21         SCL
   ----------------
-  USB        Solar Panel input  
+  USB        Solar Panel (+) input  
 ------------------
   
 */
 
 #include <Adafruit_SleepyDog.h>
 #include "Adafruit_FONA.h"
-//#include "Adafruit_MQTT.h"//??
-//#include "Adafruit_MQTT_FONA.h"//??
-//#include <Wire.h>//??
-//#include <SPI.h>
-//#include <SHT1x.h>//??
 #include "Adafruit_SI1145.h"
 #include <SparkFunBME280.h>
+#include <Arduino.h>   // required before wiring_private.h
+#include "wiring_private.h" // pinPeripheral() function
 
 #undef min
 #undef max
@@ -80,13 +77,13 @@ Conecctions
 #define SERIAL_BAUD   115200
 #define DEBUG //uncoment for debuging
 
-//-----------------Emoncms Configurations---------
+//----------InitialState Configurations---------
 #define SERVER "insecure-groker.initialstate.com"
-#define ACCESS_KEY ""
-#define BUCKET_KEY ""
+#define ACCESS_KEY "LDwRk4tD7et0n7Y6f14POvomdARY7BmD"
+#define BUCKET_KEY "AKB33R64RG4R"
 
 
-//---------FONA network-------------
+//---------FONA Pinout Connections---
 #define FONA_RX 1
 #define FONA_TX 0
 #define FONA_RST 5
@@ -95,18 +92,10 @@ Conecctions
 #define FONA_VIO 10
 //-----------------------------------
 
-//-----------------------------------
+//---------Weather Meters Pinout-----
 #define WSPEED 11
 #define RAIN 12
 #define WDIR A0 
-//-----------------------------------
-
-//----------SHT10 Sensor-------------
-/*
-#define SHT_DATA A2
-#define SHT_CLOCK A3
-SHT1x sht1x(SHT_DATA, SHT_CLOCK);//Soil
-*/
 //-----------------------------------
 
 //----------SI1145 Sensor------------
@@ -131,26 +120,11 @@ Adafruit_FONA fona = Adafruit_FONA(FONA_RST);
 
 uint8_t readline(char *buff, uint8_t maxbuff, uint16_t timeout = 0);
 
-// Size of the geo fence (in meters)
-const float maxDistance = 100;
-
 //Last Fona Battery percentage
 uint16_t last_fona_battery_state;
 
-// Initial GPS read
-//uint8_t gps_fix = 0;
-
 // Latitude & longitude for distance measurement
 float initialLatitude, initialLongitude, latitude, longitude, speed_kph, heading, altitude, distance;
-float gsm_latitude, gsm_longitude;
-
-//boolean lock_initial_gps = false;
-//uint8_t gps_fix_failures = 0;
-
-// FONA GPRS configuration
-#define FONA_APN             ""  // APN used by cell data service (leave blank if unused)
-#define FONA_USERNAME        ""  // Username used by cell data service (leave blank if unused).
-#define FONA_PASSWORD        ""  // Password used by cell data service (leave blank if unused).
 
 // volatiles are subject to modification by IRQs
 volatile unsigned long raintime, rainlast, raininterval, rain;
@@ -161,24 +135,30 @@ long lastSecond; //The millis counter to see when a second rolls by
 byte seconds; //When it hits 60, increase the current minute
 byte seconds_2m; //Keeps track of the "wind speed/dir avg" over last 2 minutes array of data
 byte minutes; //Keeps track of where we are in various arrays of data
-byte minutes_10m; //Keeps track of where we are in wind gust/dir over last 10 minutes array of data
+//byte minutes_10m; //Keeps track of where we are in wind gust/dir over last 10 minutes array of data
 
 long lastWindCheck = 0;
+
+/*
+ * Why use volatile Variables for interrupt routines
+ * Typically global variables are used to pass data between an ISR and the main program. 
+ * To make sure variables shared between an ISR and the main program are updated correctly, declare them as volatile.
+ * If they are not declared as "volatile" the compiler could optimize the code, blocking unexpected changes(like an interrups
+ * modifying that variable), causing undesirable results
+*/
 volatile long lastWindIRQ = 0;
 volatile byte windClicks = 0;
 
-//We need to keep track of the following variables:
-//Wind speed/dir each update (no storage)
-//Wind gust/dir over the day (no storage)
-//Wind speed/dir, avg over 2 minutes (store 1 per second)
-//Wind gust/dir over last 10 minutes (store 1 per minute)
-//Rain over the past hour (store 1 per minute)
-//Total rain over date (store one per day)
+/*----We need to keep track of the following variables:
+ * Wind speed/dir each update (no storage)
+ * Wind gust/dir over the day (no storage)
+ * Wind speed/dir, avg over 2 minutes (store 1 per second)
+ * Rain over the past hour (store 1 per minute)
+ * Total rain over date (store one per day)
+*/
 
 byte windspdavg[120]; //120 bytes to keep track of 2 minute average
-int winddiravg[1200]; //120 ints to keep track of 2 minute average
-float windgust_10m[10]; //10 floats to keep track of 10 minute max
-int windgustdirection_10m[10]; //10 ints to keep track of 10 minute max
+int winddiravg[120]; //120 ints to keep track of 2 minute average
 volatile float rainHour[60]; //60 floating numbers to keep track of 60 minutes of rain
 
 //These are all the weather values that wunderground expects:
@@ -188,28 +168,58 @@ float windgustmph = 0; // [mph current wind gust, using software specific time p
 int windgustdir = 0; // [0-360 using software specific time period]
 float windspdmph_avg2m = 0; // [mph 2 minute average wind speed mph]
 int winddir_avg2m = 0; // [0-360 2 minute average wind direction]
-float windgustmph_10m = 0; // [mph past 10 minutes wind gust mph ]
-int windgustdir_10m = 0; // [0-360 past 10 minutes wind gust direction]
+
 
 #define MAX_TX_FAILURES      4  // Maximum number of publish failures in a row before resetting the whole sketch.
 
-uint8_t txFailures = 0;                                       // Count of how many publish failures have occured in a row.
+uint8_t txFailures = 0;//Count of how many publish failures have occured in a row.
 
 //------------------------------------------------
 
-uint32_t previousMillis_1 = 0;
-uint32_t previousMillis_2 = 0;
+uint32_t previousMillis_1 = 0;//Save last time when Fona send a message
+uint32_t previousMillis_2 = 0;//Save last time when Fona was checked
 uint32_t time_on = 1000;//
 uint32_t timer_on_fona_check = 1000;
 
+//======================Sercom4 Configurations========================
+/*
+ * SERCOM is a configurable Serial Comunication Port that can work as
+ * I2C, SPI, USART(Serial), LIN Slave. Whe have 6 sercoms in total
+ * Here Sercom4 is configured as Serial Port
+ * More about SERCOMS:
+ * https://learn.adafruit.com/using-atsamd21-sercom-to-add-more-spi-i2c-serial-ports/muxing-it-up?view=all
+*/
+Uart Serial2 (&sercom4, A1, A2, SERCOM_RX_PAD_0, UART_TX_PAD_0);
+void SERCOM4_Handler(){
+  Serial2.IrqHandler();
+}//end SERCOM4_Handler
+
+#define openlog Serial2 //Easy identification for my Serial port
+
 //======================Default Functions=============================
 
+const uint8_t LED = 13;
+uint32_t pris = 0;  
+void blink(uint32_t timer, uint32_t interval){
+  if(timer - pris > interval) {
+    // save the last time you blinked the LED 
+    if(!digitalRead(LED)){
+      digitalWrite(LED, HIGH);
+    }else{
+      digitalWrite(LED, LOW);  
+    }//end if
+    pris = timer;
+  }//end if
+}//end temporizer
+
 void setup() {
-  pinMode(WSPEED, INPUT_PULLUP); // input from wind meters windspeed sensor
-  pinMode(RAIN, INPUT_PULLUP); // input from wind meters rain gauge sensor  
-  pinMode(FONA_KEY, OUTPUT);
-  pinMode(FONA_PS, INPUT);
-  pinMode(FONA_VIO, OUTPUT);
+  pinMode(LED, OUTPUT);
+  pinMode(WSPEED, INPUT_PULLUP);  // input from wind meters windspeed sensor
+  pinMode(RAIN, INPUT_PULLUP);    // input from wind meters rain gauge sensor  
+  pinMode(FONA_PS, INPUT);        //Power Supply Pin. It indicates whether FONA is ON or OFF
+  pinMode(FONA_KEY, OUTPUT);      //Tie this pin to ground for 2 seconds to turn the module on or off. 
+                                  //It's not a level signal so it isn't like "low is off, high is on"
+  pinMode(FONA_VIO, OUTPUT);      //Sets the logic level converters to right voltage. In this case 3.3v
   digitalWrite(FONA_VIO, HIGH);
 
   seconds = 0;
@@ -220,24 +230,37 @@ void setup() {
   #endif
   delay(5000);
 
-  //Start up FONA in setup method;
-  init_fona();
+  openlog.begin(9600);
+  /*
+   * Last Sercom config needed
+   * Assign pins A1(TX) & A2(RX) SERCOM functionality
+  */
+  pinPeripheral(A1, PIO_SERCOM_ALT);
+  pinPeripheral(A2, PIO_SERCOM_ALT);  
+
+  //Startup FONA in setup method;
+  if(!init_fona()){
+    restart(F("Serius errors reported, restarting"));
+  }else{
+    serial.println(F("FONA configured correctly"));
+  }//end if
   print_IMEI();
 
-  //Timers uptade
-  time_on *= 60*2;//Send messages every 5 min aprox.
-  timer_on_fona_check *= 30;//Check FONA every 30s aprox;
+  /*Update default timers configuration*/
+  time_on *= 60*2;            //Send HTTP messages to InitialState every 2 min aprox.
+  timer_on_fona_check *= 30;  //Check FONA every 30s aprox;
 
-  //Weather Interrupts
+  /*
+   * Attaching funcionts to RAIN and WSPEED pins for read wheater meters 
+   * More about attachInterrupt().
+   * https://www.arduino.cc/en/Reference/attachInterrupt
+  */
   attachInterrupt(RAIN, rainIRQ, FALLING);
   attachInterrupt(WSPEED, wspeedIRQ, FALLING);
 
-  // turn on interrupts
-  interrupts();  
-
-
-  //---SI1145---
-  if (! uv.begin()) {
+  interrupts(); // turn on interrupts
+  
+  if (! uv.begin()) { //Initialize SI1145. This is 
     #if defined(DEBUG)
     Serial.println("Didn't find Si1145");
     #endif
@@ -254,65 +277,111 @@ void setup() {
 }//end setup
 
 void loop(){
-  uint32_t m_millis = millis();
-  uint32_t c_millis = millis();
-  temporizer_1(m_millis, time_on);
-  check_connection(c_millis, timer_on_fona_check);//Check connections
-  windIterate();
+  uint32_t c_millis = millis();     //Time 
+  blink(c_millis, 1000);            //Blink LED 13 every 1s. Indicate that loop is running
+  update_initial_state(c_millis, time_on);
+  check_connection(c_millis, timer_on_fona_check);//Check FONA connections
+  windIterate(); //Keep updated wind averages
+  
   #if defined(DEBUG)
   serial.flush();
   #endif
-}//end loop
 
-//====================================================================
+  /*Track execution time*/
+  uint32_t stop_time = millis()-c_millis;
+  if(stop_time > 2){
+    openlog.print(F("Execution time = "));
+    openlog.println(stop_time);
+    Serial.println(stop_time);
+    Serial.print(F("Execution time = "));
+    Serial.println(stop_time);
+  }
+
+}//end loop
 
 //=======================Fona Related Functions=======================
 
-void init_fona(){
-  fona_off();
-  delay(2000);
-  fona_on();
-  delay(2000);
+uint8_t init_fona(){
+  serial.print(F("Turning OFF = "));
+  if(!fona_off()){
+    serial.println(F("Fona is OFF"));
+  }//end if
+  delay(1000);
+  serial.print (F("Turning ON = "));
+  if(!fona_on()){
+    serial.println(F("Fona is ON"));
+  }//end if
+  delay(2000);//Wait until FONA startup his Serial Port
   fonaSerial.begin(4800);
-  if(!check_fona()){// See if the FONA is responding
-    halt(F("Couldn't find FONA"));
+  if(check_fona()){// See if the FONA is responding
+    serial.println(F("Couldn't find FONA"));
+    return EXIT_FAILURE;
+  }else{
+    serial.println(F("FONA Serial Port is UP"));
   }//end if
   
-  //APN configuration
-  //fona.setGPRSNetworkSettings(F(FONA_APN), F(FONA_USERNAME), F(FONA_PASSWORD));
+  /*=====================APN configuration=====================
+   *Some celular provider don't need extra settings 
+   *fona.setGPRSNetworkSettings(F(FONA_APN), F(FONA_USERNAME), F(FONA_PASSWORD));
+  */
   fona.setGPRSNetworkSettings(F("kolbi3g"), F(""), F(""));
 
+  /*During tests I see that is better wait at least 20s
+   *Otherwise FONA could not get authenticated on the network cell 
+  */
   #if defined(DEBUG)
   serial.println(F("Waiting 20s.."));
   #endif
   
   delay(20000);//Wait for FONA
 
-  gprs_disable();
-  gprs_enable(0);
-  fona_gps_on();
+  
+
+  /*I don't know the GPRS state*/
+  serial.println("Trying to shut off GPRS");
+  if(!gprs_disable()){
+    serial.println(F("GPRS disabled"));
+  }else{
+    //If GPRS is off, then it could 
+    serial.println(F("GPRS disable failed"));
+  }//end if
+  
+  serial.println(F("Trying to startup GPRS"));
+  if(!gprs_enable()){
+    serial.println(F("GPRS is ON"));
+  }else{
+    serial.println(F("GPRS ON failed"));
+    return EXIT_FAILURE;
+  }//end if
+
+  //If GPS could not work
+  serial.println(F("Trying to startup GPS"));
+  if(!fona_gps_on()){
+    serial.println(F("GPS is ON"));
+  }else{
+    serial.println(F("GPS ON failed"));
+    return EXIT_FAILURE;
+  }//end if
   gpFIX();
+  return EXIT_SUCCESS;
 
 }//end init_fona
 
 uint8_t check_fona(){
   // See if the FONA is responding
-  if (!fona.begin(fonaSerial)) {
-    #if defined(DEBUG)
-      serial.println(F("Couldn't find FONA"));
-    #endif
-    return 0;
+  if (fona.begin(fonaSerial)) {//Testing FONA serial port
+    return EXIT_SUCCESS;
   }//end if
-  #if defined(DEBUG)
-    serial.println(F("FONA is OK"));
-  #endif
-  return 1;
+  return EXIT_FAILURE;
 }//end check_fona
 
 uint8_t check_connection(uint32_t &timer, uint32_t interval){
   //noInterrupts();//<-------?????27/10/2016
   if(timer - previousMillis_2 > interval) {
+    //TODO => Check Power Status, Serial Port
+    
     serial.println(F("Checking FONA connection"));
+    //TODO => Chech GPRSstate and Netowrk Separated
     if((!fona.GPRSstate())||(fona.getNetworkStatus() != 1)){
       //halt(F("Network connection problems, resetting..."));
       serial.println(F("Network connection problems, resetting..."));
@@ -330,80 +399,89 @@ uint8_t check_connection(uint32_t &timer, uint32_t interval){
   //interrupts();//<-------?????27/10/2016
 }//end check_connection
 
-void fona_on(){
-  #if defined(DEBUG)
-    serial.println("Turning on Fona: ");
-  #endif
-  while(digitalRead(FONA_PS)==LOW){
+/*
+ * Tie  pin FONA_KEY to ground for 2 seconds to turn the module on or off.
+ * It's not a level signal so it isn't like "low is off, high is on" 
+ * instead you must pulse it for 2 seconds to turn off/on
+*/
+
+uint8_t fona_on(){
+  while(digitalRead(FONA_PS)==LOW){//If FONA_PS still LOW, FONA is OFF
     digitalWrite(FONA_KEY, LOW);
-    delay(3000);
-    break;    
+    delay(2500);
+    digitalWrite(FONA_KEY, HIGH);
   }//end while
-  digitalWrite(FONA_KEY, HIGH);
-  //delay(2000); 
+  return EXIT_SUCCESS;
 }//end fona_on
 
-void fona_off(){
-  #if defined(DEBUG)
-    serial.println("Turning off Fona: ");
-  #endif
-  while(digitalRead(FONA_PS)==HIGH){
+uint8_t fona_off(){
+  while(digitalRead(FONA_PS)==HIGH){//If FONA_PS is HIGH the FONA still ON
     digitalWrite(FONA_KEY, LOW);
-    delay(3000);
-    break;
+    delay(2500);
+    digitalWrite(FONA_KEY, HIGH);
   }//end while
-  digitalWrite(FONA_KEY, HIGH);
-  //delay(4000);
+  return EXIT_SUCCESS;
 }//end fona_off
 
-int gprs_enable(int maxtry){
-  // turn GPRS on
-  if (!fona.enableGPRS(true)){
-    #if defined(DEBUG)
-      serial.print(F("Failed to turn on GPRS = "));
-      serial.println(maxtry);
-    #endif
-    if(maxtry > 200){
-      halt(F("GPRS Failed, shutdown"));
-    }
-    maxtry +=1;
-    gprs_enable(maxtry);
-  }else{
-    #if defined(DEBUG)
-      serial.println(F("GPRS ON"));
-    #endif
+uint8_t fona_network_status(){
+  uint8_t network_status = fona.getNetworkStatus();
+  if(network_status == 0){
+    serial.println(F("Not registered"));
+    return EXIT_FAILURE;    
+  }else if(network_status == 1){
+    serial.println(F("Registered (home)"));
+    return EXIT_SUCCESS;
+  }else if(network_status == 2){
+    serial.println(F("Not registered (searching)"));
+    return EXIT_FAILURE;    
+  }else if(network_status == 3){
+    serial.println(F("Denied"));
+    return EXIT_FAILURE;        
+  }else if(network_status == 4){
+    serial.println(F("Unknown"));
+    return EXIT_FAILURE;        
+  }else if(network_status == 5){
+    serial.println(F("Registered roaming"));
+    return EXIT_FAILURE;        
   }//end if
+}
+
+uint8_t gprs_enable(void){
+  /*
+   * Turn GPRS ON, try 200 times until GPRS is ON, if that does not work
+   * restart all system
+  */
+  for(uint8_t i = 0; i < 200; i++){
+    if(fona.enableGPRS(true)){
+      /* ==>TODO<==
+       * Add to LOG # of attempts to achieve turn ON GPRS
+      */      
+      return EXIT_SUCCESS; //Indicates exit witout problems
+    }//end if
+  }//end for
+  return EXIT_FAILURE;
 }//end gprs_enable
 
-int gprs_disable(){
+uint8_t gprs_disable(){
   // turn GPRS off
   if (!fona.enableGPRS(false)){
-    #if defined(DEBUG)
-      serial.println(F("Failed to turn GPRS off"));
-    #endif
-    return 0;
-  }else{
-    #if defined(DEBUG)
-      serial.println(F("GPRS OFF"));
-    #endif
-    return 1;
+    return EXIT_FAILURE;
   }//end if
+  return EXIT_SUCCESS;
 }//end gprs_disable
 
-int fona_gps_on(void){                    //turn GPS on
+uint8_t fona_gps_on(void){                    //turn GPS on
   if (!fona.enableGPS(true)){
-    return 0;                             //Failed to turn GPS on
+    return EXIT_FAILURE;//Failed to turn GPS on
   }//end if
-  delay(2500);
-  return 1;
+  return EXIT_SUCCESS;
 }//end fona_gps_on
 
-int fona_gps_off(void){                    // turn GPS off
-  delay(2500);
+uint8_t fona_gps_off(void){                    // turn GPS off
   if (!fona.enableGPS(false)){
-    return 0;                              //Failed to turn GPS off
+    return EXIT_FAILURE;//Failed to turn GPS off
   }//end if
-  return 1;
+  return EXIT_SUCCESS;
 }//end fona_gps_off
 
 uint8_t fona_gps_location(){
@@ -418,8 +496,6 @@ uint16_t fona_get_battery(void){
   fona.getBattPercent(&vbat);
   return vbat;
 }//end fona_get_battery
-
-//====================================================================
 
 //======================Miscelanius Funcions==========================
 
@@ -436,10 +512,7 @@ void print_IMEI(void){
   }//end if  
 }//end print_IMEI
 
-//float gpslat = 9.9381179;
-//float gpslong = -84.0957641;
-
-void temporizer_1(uint32_t &timer, uint32_t interval){
+void update_initial_state(uint32_t &timer, uint32_t interval){
   if((timer - previousMillis_1) > interval) {
     //noInterrupts();//<-------?????27/10/2016
   //---------Temporized code here------------
@@ -520,7 +593,7 @@ void gpFIX(){
     serial.println(txFailures);
     delay(200);
     if(txFailures > 200){
-      //halt(F("GPS not fix"));
+      //restart(F("GPS not fix"));
       break;
     }//end if
     txFailures++;
@@ -601,39 +674,6 @@ String float_to_string(float value, uint8_t places) {//Adafruit funtion
   return float_obj;
 }//end float_to_string
 
-String json_split(String &message, String &node_id){
-  String brak = "\{";
-  String number = "";
-  uint16_t j = 0;
-  uint8_t data_num = 1;
-  node_id = "";
-  for(uint8_t i = 0; i < message.length(); i++){
-    if((message[i] == ';')||(message[i] == ' ')){
-      j = i+1;
-      break;
-    }else{
-      node_id += message[i];
-    }//end if
-  }//end for
-
-  for(j; j < message.length(); j++){
-    if((message[j] == ';')||(message[j] == ' ')){
-      brak += String(data_num) + "\:" + number + "\,";
-      data_num++;
-      //serial.println(brak);
-      number = "";
-    }else{
-      if(message[j]!= '\r'){
-        number += message[j];
-      }
-    }//end if
-    
-  }//end for
-  brak += String(data_num) + "\:" + number+"\}";
-  return brak;
-  
-}//end json_pck
-
 String lightSensorRead(){
   String ligthSensor = "";
   if(uvInitialization){
@@ -651,17 +691,53 @@ String lightSensorRead(){
 }//end lightSensorRead
 
 boolean BME280Initialization(){
-  //---BME280---
-  weatherSensor.settings.commInterface = I2C_MODE;
-  weatherSensor.settings.I2CAddress = 0x77;
-  //***Operation settings*****************************//
+  //**************Driver settings********************//
+  
+  weatherSensor.settings.commInterface = I2C_MODE;  //commInterface can be I2C_MODE or SPI_MODE
+  
+  weatherSensor.settings.I2CAddress = 0x77; //specify I2C address.  Can be 0x77(default) or 0x76  
+  //*************Operation settings******************//
+  /*
+   * 0 Sleep Mode
+   * 1 or 2 Forced mode
+   * 3 Normal Mode
+  */
   weatherSensor.settings.runMode = 3; //  3, Normal mode
+
+  /*
+   * tStandby can be:
+   * 0.5 ms
+   * 62.5ms
+   * 125ms
+   * 250ms
+   * 500ms
+   * 1000ms
+   * 10ms
+   * 20ms
+  */
   weatherSensor.settings.tStandby = 0; //  0, 0.5ms
+
+  /*Filter can be off or number of FIR coefficients to use
+   * 0 Filter OFF
+   * 1 Coef. =2
+   * 2 Coef. = 4
+   * 3 Coef. = 8
+   * 4 Coef. = 16
+   * 
+   * Read about FIR coefficients http://dspguru.com/dsp/faqs/fir/basics
+  */
   weatherSensor.settings.filter = 0; //  0, filter off
+  /*
+   * OverSample can be:
+   * 0 skipped
+   * 1 through 5, oversampling *1, *2, *4, *8, *16 respectively  
+  */
   weatherSensor.settings.tempOverSample = 1;
   weatherSensor.settings.pressOverSample = 1;
   weatherSensor.settings.humidOverSample = 1;
-  weatherSensor.begin();
+
+  delay(10);//Make sure sensor had enough time to turn on. BME280 requires 2ms to start up.  
+  Serial.println(weatherSensor.begin());//Calling .begin() causes the settings to be loaded
   //---------
   return true;
 }//end BME280Initialization
@@ -692,10 +768,10 @@ void windIterate(){
     winddiravg[seconds_2m] = currentDirection;
 
     //Check to see if this is a gust for the minute
-    if(currentSpeed > windgust_10m[minutes_10m]){
-      windgust_10m[minutes_10m] = currentSpeed;
-      windgustdirection_10m[minutes_10m] = currentDirection;
-    }
+    //if(currentSpeed > windgust_10m[minutes_10m]){
+    //  windgust_10m[minutes_10m] = currentSpeed;
+    //  windgustdirection_10m[minutes_10m] = currentDirection;
+    //}
 
     //Check to see if this is a gust for the day
     if(currentSpeed > windgustmph){
@@ -706,7 +782,7 @@ void windIterate(){
       seconds = 0;
 
       if(++minutes > 59) minutes = 0;
-      if(++minutes_10m > 9) minutes_10m = 0;
+//      if(++minutes_10m > 9) minutes_10m = 0;
     }//end if
   }
 }//end windIterate
@@ -795,14 +871,13 @@ void flushSerial() {
   #endif
 }//end flushSerial
 
-void halt(const __FlashStringHelper *error) {
+void restart(const __FlashStringHelper *error) {
   serial.println(error);
   delay(1000);
   Watchdog.enable(1000);
   Watchdog.reset();
   while (1) {}
-}//end halt
-//====================================================================
+}//end restart
 
 //==========================Web Functions=============================
 // Post data to website
@@ -883,8 +958,6 @@ int send_url(String raw_paq){
   fona.HTTP_POST_end();*/
 }//end send_url
 
-//====================================================================
-
 //==========================Interrupt routines========================
 void rainIRQ(){
 // Count rain gauge bucket tips as they occur
@@ -907,6 +980,5 @@ void wspeedIRQ(){// Activated by the magnet in the anemometer (2 ticks per rotat
     windClicks++; //There is 1.492MPH for each click per second.
   }//end if
 }//end wspeedIRQ
-//====================================================================
 
 
