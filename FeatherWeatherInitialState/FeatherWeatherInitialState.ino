@@ -79,8 +79,8 @@ Conecctions
 
 //----------InitialState Configurations---------
 #define SERVER "insecure-groker.initialstate.com"
-#define ACCESS_KEY "LDwRk4tD7et0n7Y6f14POvomdARY7BmD"
-#define BUCKET_KEY "AKB33R64RG4R"
+#define ACCESS_KEY ""
+#define BUCKET_KEY ""
 
 
 //---------FONA Pinout Connections---
@@ -240,7 +240,7 @@ void setup() {
 
   //Startup FONA in setup method;
   if(!init_fona()){
-    restart(F("Serius errors reported, restarting"));
+    restart(F("Serius error reported, restarting"));
   }else{
     serial.println(F("FONA configured correctly"));
   }//end if
@@ -335,7 +335,10 @@ uint8_t init_fona(){
   
   delay(20000);//Wait for FONA
 
-  
+  if(fona_network_status()){
+    serial.println(F("Network problem reported"));
+    return EXIT_FAILURE;
+  }//end if
 
   /*I don't know the GPRS state*/
   serial.println("Trying to shut off GPRS");
@@ -444,7 +447,7 @@ uint8_t fona_network_status(){
     serial.println(F("Registered roaming"));
     return EXIT_FAILURE;        
   }//end if
-}
+}//end fona_network_status
 
 uint8_t gprs_enable(void){
   /*
