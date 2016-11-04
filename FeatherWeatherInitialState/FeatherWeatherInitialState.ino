@@ -195,7 +195,7 @@ void SERCOM4_Handler(){
 }//end SERCOM4_Handler
 
 #define openlog Serial2 //Easy identification for my Log Serial port
-#define serial openlog
+//#define serial openlog
 
 //======================Default Functions=============================
 
@@ -266,12 +266,12 @@ void setup() {
   
   if (!light_sensor.begin()) { //Initialize SI1145. This is 
     #if defined(DEBUG)
-    Serial.println("Didn't find Si1145");
+    serial.println("Didn't find Si1145");
     #endif
   }else{
     uvInitialization = true;
     #if defined(DEBUG)
-      Serial.println("Si1145 initialized");
+      serial.println("Si1145 initialized");
     #endif
   }//end if   
   //------
@@ -290,17 +290,6 @@ void loop(){
   #if defined(DEBUG)
   serial.flush();
   #endif
-
-  /*Track execution time*/
-  uint32_t stop_time = millis()-c_millis;
-  if(stop_time > 2){
-    openlog.print(F("Execution time = "));
-    openlog.println(stop_time);
-    Serial.println(stop_time);
-    Serial.print(F("Execution time = "));
-    Serial.println(stop_time);
-  }
-
 }//end loop
 
 //=======================Fona Related Functions=======================
@@ -319,7 +308,7 @@ uint8_t init_fona(){
   delay(2000);//Wait until FONA startup his Serial Port
 
   /*
-   * I need how much time the Feather need to configure FONA
+   * How much time the Feather need to configure FONA
    * it need to be less than 8s
    * 
    * This variable is just for testing
@@ -362,7 +351,7 @@ uint8_t init_fona(){
   */
   start_time_measurement = millis();
 
-  serial.println(F("Inspect Network State"));
+  serial.print(F("[CHECKING] Network State :"));
   if(fona_network_status()){
     serial.println(F("Network problem reported"));
     return EXIT_FAILURE;
@@ -385,6 +374,16 @@ uint8_t init_fona(){
     serial.println(F("GPRS is ON"));    
   }//end if
 
+  serial.print(F("Synced with NTP servers : "));
+  if(fona_sync_ntp()){
+    serial.println(F("Failed to enable NTP sync"));
+  }else{
+    serial.println(F("OK"));
+    char buffer[23];
+    fona.getTime(buffer, 23);  // make sure replybuffer is at least 23 bytes!
+    Serial.print(F("Time = ")); Serial.println(buffer);    
+  }//end if
+
   //If GPS could not work
   serial.println(F("Trying to startup GPS"));
   if(fona_gps_on()){
@@ -398,12 +397,12 @@ uint8_t init_fona(){
   serial.print(F("Time invested configuring the FONA 2 = "));
   serial.println(stop_time_measurement-start_time_measurement);
    
-  serial.println(F("Waiting GPS first fix"));
+  /*serial.println(F("Waiting GPS first fix"));
   if(fona_gps_fix()){
     serial.println(F("Could not get first fix yet"));
   }else{
     serial.println(F("First Fix succed"));
-  }//end if
+  }//end if*/
   
   return EXIT_SUCCESS;
 
@@ -420,28 +419,35 @@ uint8_t check_fona(){
 uint8_t check_connection(uint32_t &timer, uint32_t interval){
   //noInterrupts();//<-------?????27/10/2016
   if(timer - previousMillis_2 > interval) {
-    //TODO => Check Power Status, Serial Port
-    
-    serial.println(F("Checking FONA connection"));
-    //TODO => Chech GPRSstate and Netowrk Separated
-    if((!fona.GPRSstate())||(fona.getNetworkStatus() != 1)){
-      //halt(F("Network connection problems, resetting..."));
-      serial.println(F("Network connection problems, resetting..."));
-      delay(1000);
-      init_fona();
-    }else if ((txFailures >= MAX_TX_FAILURES)) {//!fona.TCPconnected() || (txFailures >= MAX_TX_FAILURES)
-      serial.println(F("Connection failed, resetting..."));
-      delay(1000);
-      //halt(F("Connection failed, resetting..."));
+    serial.print(F("[CHECKING] Network state : "));
+    if(fona_network_status()){
+      serial.println(F("Network problem reported"));
       init_fona();
     }//end if
-      serial.println(F("FONA connection state : ok"));
-      previousMillis_2 = timer;
+
+    serial.print(F("[CHECKING] GPRS state : "));
+    if(!fona.GPRSstate()){
+      serial.println(F("GPRS problem reported"));
+      init_fona();
+    }else{
+      serial.println(F("OK"));
+    }//end if
+
+    serial.print(F("[CHECKING] Transmitions failures limits : "));
+    if(txFailures >= MAX_TX_FAILURES){
+      serial.println(F("Maximum transmition failures reached"));
+      init_fona();
+    }else{
+      serial.println(F("OK"));
+    }//end if
+    previousMillis_2 = timer;
   }//end if
   //interrupts();//<-------?????27/10/2016
 }//end check_connection
 
 /*
+ * ON and OFF functions
+ * 
  * Tie  pin FONA_KEY to ground for 2 seconds to turn the module on or off.
  * It's not a level signal so it isn't like "low is off, high is on" 
  * instead you must pulse it for 2 seconds to turn off/on
@@ -532,6 +538,14 @@ uint8_t fona_gps_location(){
   return gps_fix;
 }//end fona_gps_location
 
+uint8_t fona_sync_ntp(){// enable NTP time sync
+  //NTP site : http://www.pool.ntp.org/en/use.html
+  if (!fona.enableNTPTimeSync(true, F("pool.ntp.org"))){
+    return EXIT_FAILURE;
+  }//end if
+  return EXIT_SUCCESS;
+}//end if
+
 uint16_t fona_get_battery(void){
   // Grab battery reading
   uint16_t vbat;
@@ -564,7 +578,7 @@ void update_initial_state(uint32_t &timer, uint32_t interval){
   
   char GPSlocation[300];
   if(fona_gps_location()){
-      sprintf(GPSlocation, "&gpsweather=%s,%s", float_to_string(latitude, 7).c_str(), float_to_string(longitude, 7).c_str());
+    sprintf(GPSlocation, "&gpsweather=%s,%s", float_to_string(latitude, 7).c_str(), float_to_string(longitude, 7).c_str());
   }else{
     sprintf(GPSlocation, "");//
     //sprintf(GPSlocation, "&gpsweather=%s,%s", float_to_string(gpslat, 7).c_str(), float_to_string(gpslong, 7).c_str());//
@@ -573,7 +587,7 @@ void update_initial_state(uint32_t &timer, uint32_t interval){
   }//end if
 
   if(GPSlocation != ""){
-    if(send_url(String(GPSlocation)) == -1){
+    if(send_url(GPSlocation)){
       serial.println("Problem sending GPS location data");
       txFailures++;
     }else{
@@ -589,7 +603,7 @@ void update_initial_state(uint32_t &timer, uint32_t interval){
     sprintf(BME280Data, "&temperature=%d&humidity=%d&pressure=%d&bmaltitude=%d", -1, -1, -1, -1);
   }//end if
 
-  if(send_url(String(BME280Data)) == -1){
+  if(send_url(BME280Data)){
     serial.println("Problem sending BME280 data");
     txFailures++;
   }else{
@@ -600,7 +614,7 @@ void update_initial_state(uint32_t &timer, uint32_t interval){
   char weatherConditions[300];
   sprintf(weatherConditions, "&wind=%s&windSpeed=%s&rainin=%s&dailyrainin=%s", String(winddir_avg2m).c_str(), float_to_string(windspdmph_avg2m, 2).c_str(), float_to_string(rainin, 2).c_str(), float_to_string(dailyrainin, 2).c_str());
 
-  if(send_url(String(weatherConditions)) == -1){
+  if(send_url(weatherConditions)){
     serial.println("Problem sending Weather Conditions");
     txFailures++;
   }else{
@@ -608,7 +622,7 @@ void update_initial_state(uint32_t &timer, uint32_t interval){
   }//end if    
   
   String testMessage = "&battery="+String(fona_get_battery()) + lightSensorRead();
-  if(send_url(testMessage) == -1){
+  if(send_url(testMessage.c_str())){
     serial.println("Problem sending Battery State");
     txFailures++;
   }else{
@@ -633,6 +647,233 @@ uint8_t fona_gps_fix(){
   }//end if
   return EXIT_FAILURE;
 }//end fona_gps_fix
+
+String lightSensorRead(){
+  String light_sensor_data = "";
+  if(uvInitialization){
+    uint16_t temporal_save = light_sensor.readVisible();
+    if(isnan(temporal_save)){
+      serial.println(F("error reading Visible light [NAN]"));
+    }else{
+      //Read SI1145 UV Light
+      light_sensor_data += "&visible=";
+      light_sensor_data += temporal_save;
+    }//end if
+
+    temporal_save = light_sensor.readIR();
+    if(isnan(temporal_save)){
+      serial.println(F("error reading InfraRed light [NAN]"));
+    }else{
+      //Read SI1145 InfraRed Light
+      light_sensor_data += "&ir=";
+      light_sensor_data += temporal_save;
+    }//end if
+    
+    temporal_save = light_sensor.readUV();
+    if(isnan(temporal_save)){
+      serial.println(F("error reading InfraRed light [NAN]"));
+    }else{
+      //Read SI1145 UV Light
+      light_sensor_data += "&uv=";
+      /*
+       * the index is multiplied by 100 so to get the
+       * integer index, divide by 100!
+      */
+      float UVindex = temporal_save;
+      UVindex /= 100.0; 
+      
+      light_sensor_data += float_to_string(UVindex, 2);
+    }//end if 
+  }//end if
+  return light_sensor_data;
+}//end lightSensorRead
+
+boolean BME280Initialization(){
+  //**************Driver settings********************//
+  
+  weatherSensor.settings.commInterface = I2C_MODE;  //commInterface can be I2C_MODE or SPI_MODE
+  
+  weatherSensor.settings.I2CAddress = 0x77; //specify I2C address.  Can be 0x77(default) or 0x76  
+  //*************Operation settings******************//
+  /*
+   * 0 Sleep Mode
+   * 1 or 2 Forced mode
+   * 3 Normal Mode
+  */
+  weatherSensor.settings.runMode = 3; //  3, Normal mode
+
+  /*
+   * tStandby can be:
+   * 0.5 ms
+   * 62.5ms
+   * 125ms
+   * 250ms
+   * 500ms
+   * 1000ms
+   * 10ms
+   * 20ms
+  */
+  weatherSensor.settings.tStandby = 0; //  0, 0.5ms
+
+  /*Filter can be off or number of FIR coefficients to use
+   * 0 Filter OFF
+   * 1 Coef. =2
+   * 2 Coef. = 4
+   * 3 Coef. = 8
+   * 4 Coef. = 16
+   * 
+   * Read about FIR coefficients http://dspguru.com/dsp/faqs/fir/basics
+  */
+  weatherSensor.settings.filter = 0; //  0, filter off
+  /*
+   * OverSample can be:
+   * 0 skipped
+   * 1 through 5, oversampling *1, *2, *4, *8, *16 respectively  
+  */
+  weatherSensor.settings.tempOverSample = 1;
+  weatherSensor.settings.pressOverSample = 1;
+  weatherSensor.settings.humidOverSample = 1;
+
+  delay(10);//Make sure sensor had enough time to turn on. BME280 requires 2ms to start up.  
+  Serial.println(weatherSensor.begin());//Calling .begin() causes the settings to be loaded
+  //---------
+  return true;
+}//end BME280Initialization
+
+void BME280Read(){
+  /*Coud be better send all of this as a parameter?
+   * BME280Read(float &bmpTemperature, float &bmpPressure, float &bmpAltitude, float &bmpHumidity)
+  */
+  bmpTemperature = weatherSensor.readTempC();
+  if(isnan(bmpTemperature)){
+    serial.println(F("error reading Temperature [NAN]"));
+  }//end if
+  bmpPressure =weatherSensor.readFloatPressure();
+  if(isnan(bmpPressure)){
+    serial.println(F("error reading Pressure [NAN]"));
+  }//end if  
+  bmpAltitude = weatherSensor.readFloatAltitudeMeters();
+  if(isnan(bmpAltitude)){
+    serial.println(F("error reading Altitude [NAN]"));
+  }//end if
+  bmpHumidity = weatherSensor.readFloatHumidity();
+  if(isnan(bmpHumidity)){
+    serial.println(F("error reading Humidity [NAN]"));
+  }//end if
+}//end bmp085Read
+
+void windIterate(){
+  //Keep track of which minute it is
+  if(millis() - lastSecond >= 1000){ 
+    lastSecond += 1000;
+
+    //Take a speed and direction reading every second for 2 minute average
+    if(++seconds_2m > 119) seconds_2m = 0;
+
+    //Calc the wind speed and direction every second for 120 second to get 2 minute average
+    float currentSpeed = windSpeed();
+    
+    //float currentSpeed = random(5); //For testing
+    int adc = 0;
+    int currentDirection = windDirection(adc);
+    windspdavg[seconds_2m] = (int)currentSpeed;
+    winddiravg[seconds_2m] = currentDirection;
+
+    //Check to see if this is a gust for the minute
+    //if(currentSpeed > windgust_10m[minutes_10m]){
+    //  windgust_10m[minutes_10m] = currentSpeed;
+    //  windgustdirection_10m[minutes_10m] = currentDirection;
+    //}
+
+    //Check to see if this is a gust for the day
+    if(currentSpeed > windgustmph){
+      windgustmph = currentSpeed;
+      windgustdir = currentDirection;
+    }
+    if(++seconds > 59){
+      seconds = 0;
+
+      if(++minutes > 59) minutes = 0;
+      //if(++minutes_10m > 9) minutes_10m = 0;
+    }//end if
+  }
+}//end windIterate
+
+float windSpeed(){
+  //Returns the instataneous wind speed
+  float deltaTime = millis() - lastWindCheck; //750ms
+  deltaTime /= 1000.0; //Covert to seconds
+  float windSpeed = (float)windClicks / deltaTime; //3 / 0.750s = 4
+  windClicks = 0; //Reset and start watching for new wind
+  lastWindCheck = millis();
+  windSpeed *= 1.492; //4 * 1.492 = 5.968MPH
+  return(windSpeed);
+}//end windSpeed
+
+//Read the wind direction sensor, return heading in degrees
+int windDirection(int &ad){
+  unsigned int adc;
+  adc = analogRead(WDIR); // get the current reading from the sensor
+  ad = adc;
+  //ad = adc;
+  // The following table is ADC readings for the wind direction sensor output, sorted from low to high.
+  // Each threshold is the midpoint between adjacent headings. The output is degrees for that ADC reading.
+  // Note that these are not in compass degree order! See Weather Meters datasheet for more information.
+ 
+  if (adc < 380) return (113);
+  if (adc < 393) return (68);
+  if (adc < 414) return (90);
+  if (adc < 456) return (158);
+  if (adc < 508) return (135);
+  if (adc < 551) return (203);
+  if (adc < 615) return (180);
+  if (adc < 680) return (23);
+  if (adc < 746) return (45);
+  if (adc < 801) return (248);
+  if (adc < 833) return (225);
+  if (adc < 878) return (338);
+  if (adc < 913) return (0);
+  if (adc < 940) return (293);
+  if (adc < 967) return (315);
+  if (adc < 990) return (270);
+  return (271); // error, disconnected?
+ 
+}//end windDirection
+
+void calcWeather(){
+  //Calculates each of the variables that wunderground is expecting
+  //Calc winddir
+  int ac = 0;
+  winddir = windDirection(ac);
+  //Calc windspeed
+  windspeedmph = windSpeed();
+
+  //Calc windgustmph
+  //Calc windgustdir
+  //Report the largest windgust today
+  windgustmph = 0;
+  windgustdir = 0;
+
+  //Calc windspdmph_avg2m
+  float temp = 0;
+  for(int i = 0 ; i < 120 ; i++)
+    temp += windspdavg[i];
+  temp /= 120.0;
+  windspdmph_avg2m = temp;
+
+  //Calc winddir_avg2m
+  temp = 0; //Can't use winddir_avg2m because it's an int
+  for(int i = 0 ; i < 120 ; i++)
+    temp += winddiravg[i];
+  temp /= 120;
+  winddir_avg2m = temp;
+
+  //Total rainfall for the day is calculated within the interrupt
+  //Calculate amount of rainfall for the last 60 minutes
+  rainin = 0;  
+  for(int i = 0 ; i < 60 ; i++)
+    rainin += rainHour[i];
+}//end calcWeather
 
 String float_to_string(float value, uint8_t places) {//Adafruit funtion
   // this is used to cast digits 
@@ -703,207 +944,6 @@ String float_to_string(float value, uint8_t places) {//Adafruit funtion
   return float_obj;
 }//end float_to_string
 
-String lightSensorRead(){
-  String light_sensor_data = "";
-  if(uvInitialization){
-    int temporal_save = light_sensor.readVisible();
-    if(isnan(temporal_save)){
-      serial.println(F("error reading Visible light [NAN]"));
-    }else{
-      //Read SI1145 UV Light sensor
-      light_sensor_data += "&visible=";
-    }//end if
-
-    light_sensor_data += light_sensor.readVisible();
-    light_sensor_data += "&ir=";
-    light_sensor_data += light_sensor.readIR();
-    light_sensor_data += "&uv=";
-    /*
-     * the index is multiplied by 100 so to get the
-     * integer index, divide by 100!
-    */
-    float UVindex = light_sensor.readUV();
-    UVindex /= 100.0; 
-    
-    light_sensor_data += UVindex;//light_sensor.readUV();  
-  }//end if
-  return light_sensor_data;
-}//end lightSensorRead
-
-boolean BME280Initialization(){
-  //**************Driver settings********************//
-  
-  weatherSensor.settings.commInterface = I2C_MODE;  //commInterface can be I2C_MODE or SPI_MODE
-  
-  weatherSensor.settings.I2CAddress = 0x77; //specify I2C address.  Can be 0x77(default) or 0x76  
-  //*************Operation settings******************//
-  /*
-   * 0 Sleep Mode
-   * 1 or 2 Forced mode
-   * 3 Normal Mode
-  */
-  weatherSensor.settings.runMode = 3; //  3, Normal mode
-
-  /*
-   * tStandby can be:
-   * 0.5 ms
-   * 62.5ms
-   * 125ms
-   * 250ms
-   * 500ms
-   * 1000ms
-   * 10ms
-   * 20ms
-  */
-  weatherSensor.settings.tStandby = 0; //  0, 0.5ms
-
-  /*Filter can be off or number of FIR coefficients to use
-   * 0 Filter OFF
-   * 1 Coef. =2
-   * 2 Coef. = 4
-   * 3 Coef. = 8
-   * 4 Coef. = 16
-   * 
-   * Read about FIR coefficients http://dspguru.com/dsp/faqs/fir/basics
-  */
-  weatherSensor.settings.filter = 0; //  0, filter off
-  /*
-   * OverSample can be:
-   * 0 skipped
-   * 1 through 5, oversampling *1, *2, *4, *8, *16 respectively  
-  */
-  weatherSensor.settings.tempOverSample = 1;
-  weatherSensor.settings.pressOverSample = 1;
-  weatherSensor.settings.humidOverSample = 1;
-
-  delay(10);//Make sure sensor had enough time to turn on. BME280 requires 2ms to start up.  
-  Serial.println(weatherSensor.begin());//Calling .begin() causes the settings to be loaded
-  //---------
-  return true;
-}//end BME280Initialization
-
-void BME280Read(){
-  bmpTemperature = weatherSensor.readTempC();
-  bmpPressure =weatherSensor.readFloatPressure();
-  bmpAltitude = weatherSensor.readFloatAltitudeMeters();
-  bmpHumidity = weatherSensor.readFloatHumidity();
-}//end bmp085Read
-
-void windIterate(){
-  //Keep track of which minute it is
-  if(millis() - lastSecond >= 1000){
-    
-    lastSecond += 1000;
-
-    //Take a speed and direction reading every second for 2 minute average
-    if(++seconds_2m > 119) seconds_2m = 0;
-
-    //Calc the wind speed and direction every second for 120 second to get 2 minute average
-    float currentSpeed = windSpeed();
-    
-    //float currentSpeed = random(5); //For testing
-    int adc = 0;
-    int currentDirection = windDirection(adc);
-    windspdavg[seconds_2m] = (int)currentSpeed;
-    winddiravg[seconds_2m] = currentDirection;
-
-    //Check to see if this is a gust for the minute
-    //if(currentSpeed > windgust_10m[minutes_10m]){
-    //  windgust_10m[minutes_10m] = currentSpeed;
-    //  windgustdirection_10m[minutes_10m] = currentDirection;
-    //}
-
-    //Check to see if this is a gust for the day
-    if(currentSpeed > windgustmph){
-      windgustmph = currentSpeed;
-      windgustdir = currentDirection;
-    }
-    if(++seconds > 59){
-      seconds = 0;
-
-      if(++minutes > 59) minutes = 0;
-//      if(++minutes_10m > 9) minutes_10m = 0;
-    }//end if
-  }
-}//end windIterate
-
-//Returns the instataneous wind speed
-float windSpeed(){
-  float deltaTime = millis() - lastWindCheck; //750ms
-  deltaTime /= 1000.0; //Covert to seconds
-  float windSpeed = (float)windClicks / deltaTime; //3 / 0.750s = 4
-  windClicks = 0; //Reset and start watching for new wind
-  lastWindCheck = millis();
-  windSpeed *= 1.492; //4 * 1.492 = 5.968MPH
-  return(windSpeed);
-}//end windSpeed
-
-//Read the wind direction sensor, return heading in degrees
-int windDirection(int &ad){
-  unsigned int adc;
-
-  adc = analogRead(WDIR); // get the current reading from the sensor
-  ad = adc;
-  //ad = adc;
-  // The following table is ADC readings for the wind direction sensor output, sorted from low to high.
-  // Each threshold is the midpoint between adjacent headings. The output is degrees for that ADC reading.
-  // Note that these are not in compass degree order! See Weather Meters datasheet for more information.
- 
-  if (adc < 380) return (113);
-  if (adc < 393) return (68);
-  if (adc < 414) return (90);
-  if (adc < 456) return (158);
-  if (adc < 508) return (135);
-  if (adc < 551) return (203);
-  if (adc < 615) return (180);
-  if (adc < 680) return (23);
-  if (adc < 746) return (45);
-  if (adc < 801) return (248);
-  if (adc < 833) return (225);
-  if (adc < 878) return (338);
-  if (adc < 913) return (0);
-  if (adc < 940) return (293);
-  if (adc < 967) return (315);
-  if (adc < 990) return (270);
-  return (271); // error, disconnected?
- 
-}//end windDirection
-
-void calcWeather(){
-  //Calculates each of the variables that wunderground is expecting
-  //Calc winddir
-  int ac = 0;
-  winddir = windDirection(ac);
-  //Calc windspeed
-  windspeedmph = windSpeed();
-
-  //Calc windgustmph
-  //Calc windgustdir
-  //Report the largest windgust today
-  windgustmph = 0;
-  windgustdir = 0;
-
-  //Calc windspdmph_avg2m
-  float temp = 0;
-  for(int i = 0 ; i < 120 ; i++)
-    temp += windspdavg[i];
-  temp /= 120.0;
-  windspdmph_avg2m = temp;
-
-  //Calc winddir_avg2m
-  temp = 0; //Can't use winddir_avg2m because it's an int
-  for(int i = 0 ; i < 120 ; i++)
-    temp += winddiravg[i];
-  temp /= 120;
-  winddir_avg2m = temp;
-
-  //Total rainfall for the day is calculated within the interrupt
-  //Calculate amount of rainfall for the last 60 minutes
-  rainin = 0;  
-  for(int i = 0 ; i < 60 ; i++)
-    rainin += rainHour[i];
-}//end calcWeather
-
 void flushSerial() {
   #if defined(DEBUG)
   while (serial.available()) 
@@ -913,7 +953,7 @@ void flushSerial() {
 
 void restart(const __FlashStringHelper *error) {
   serial.println(error);
-  delay(1000);
+  delay(1000);//Wait 1s for print pending message
   Watchdog.enable(1000);
   Watchdog.reset();
   while (1) {}
@@ -921,18 +961,15 @@ void restart(const __FlashStringHelper *error) {
 
 //==========================Web Functions=============================
 // Post data to website
-int send_url(String raw_paq){
-  uint16_t statuscode;
-  int16_t length;
-  String node = "";//Store node id
-  //String json = json_split(raw_paq, node);//split packet into json format and store node id througth reference
+uint8_t send_url(const char *raw_paq){
+  /*For Initial State Event API please visite
+   * http://docs.initialstateeventsapi.apiary.io/#
+  */
   String url = "GET ";
   url += "/api/events?accessKey="+String(ACCESS_KEY)+"&bucketKey="+String(BUCKET_KEY);
 
-//  int l_url = url.length();//strlen(data)
-
   char c_url[800];
-  sprintf(c_url, "%s%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", url.c_str(), raw_paq.c_str(), SERVER);
+  sprintf(c_url, "%s%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", url.c_str(), raw_paq, SERVER);
 
   // if there's a successful connection:
   if (fona.TCPconnect(SERVER, 80)) {
@@ -941,74 +978,47 @@ int send_url(String raw_paq){
     
     if(fona.TCPconnected()){
         Serial.println(F("Sending"));
-        Serial.println(c_url);
+        serial.println(c_url);
         fona.TCPsend(c_url, strlen(c_url));
     }else {
       // if you couldn't make a connection:
-      Serial.println("ERROR connecting");
-    }
+      serial.println("ERROR connecting");
+      txFailures++;
+      return EXIT_FAILURE;
+    }//end if
   }
-
-/*  char response[256];//
-  while(fona.TCPavailable()){
-    if(fona.TCPread(response, 256)){
-      serial.println(response);
-    }
-  }
-*/
-  fona.TCPclose();
-  //flushSerial();
+  delay(50);//Wait a little for website response
   
- /* #if defined(DEBUG)  
-    serial.println(c_url);
-    serial.println(F("****"));
-  #endif
+  uint8_t max_buffer = 255;
+  uint8_t response[max_buffer];//The response could not be greather than 255 because TCPread() can't parse more than that
+  uint16_t avail;
 
-  char data[100];
-  sprintf(data, "[{\"key\":\"temperaute\",\"value\":\"%d\"}]", 1);
-  char x_url[800];
-  sprintf(x_url, "%s", url.c_str());
-  //if (!fona.HTTP_GET_start(c_url, &statuscode, (uint16_t *)&length)) {
-  if (!fona.HTTP_POST_start(x_url, F("application/json"), (uint8_t *) data, strlen(data), &statuscode, (uint16_t *)&length)) {
-    #if defined(DEBUG)
-    serial.println("GPRS send failed!");
-    #endif
-    return -1;
-  }else{
-    #if defined(DEBUG)
-    serial.println("GPRS send ok");
-    #endif
-    #if defined(FREERAM)
-        serial.print("Free RAM TOP = ");
-        serial.println(freeRam());
-    #endif    
-  }
-  while (length > 0) {
-    while (fona.available()) {
-      char c = fona.read();     
-    // Serial.write is too slow, we'll write directly to Serial register!
-      #if defined(__AVR_ATmega328P__) || defined(__AVR_ATmega168__)
-          loop_until_bit_is_set(UCSR0A, UDRE0); // Wait until data register empty. 
-          UDR0 = c;
-      #else
-          #if defined(DEBUG)
-          serial.write(c);
-          #endif
-      #endif
-      length--;
-      if (! length) break;
-    }//end while
+  while(avail = fona.TCPavailable()){
+    if(!fona.TCPread(response, max_buffer)){
+      break;//There is no message
+    }//end if
   }//end while
-  #if defined(DEBUG)
-    serial.println(F("\n****"));
-  #endif
-  fona.HTTP_POST_end();*/
+
+  /*Print Response message
+   * A 204 response 
+  */
+  serial.println(F("Initial State Response :"));
+  for(uint8_t i = 0; i< max_buffer; i++){
+    if(response[i] == '\0'){
+      break;
+    }//end if
+    serial.print((char)response[i]);
+  }//end for
+  serial.println();
+  
+  fona.TCPclose();//Close TCP connection with InitialState
+  return EXIT_SUCCESS;
 }//end send_url
 
 //==========================Interrupt routines========================
 void rainIRQ(){
-// Count rain gauge bucket tips as they occur
-// Activated by the magnet and reed switch in the rain gauge, attached to input D2
+  // Count rain gauge bucket tips as they occur
+  // Activated by the magnet and reed switch in the rain gauge
 
   raintime = millis(); // grab current time
   raininterval = raintime - rainlast; // calculate interval between this and last event
@@ -1016,7 +1026,6 @@ void rainIRQ(){
   if (raininterval > 10){ // ignore switch-bounce glitches less than 10mS after initial edge
     dailyrainin += 0.011; //Each dump is 0.011" of water
     rainHour[minutes] += 0.011; //Increase this minute's amount of rain
-
     rainlast = raintime; // set up for next event
   }//end if
 }//end rainIRQ
