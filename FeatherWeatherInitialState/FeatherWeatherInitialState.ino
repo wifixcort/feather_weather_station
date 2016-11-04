@@ -99,7 +99,7 @@ Conecctions
 //-----------------------------------
 
 //----------SI1145 Sensor------------
-Adafruit_SI1145 uv = Adafruit_SI1145();//UV Light
+Adafruit_SI1145 light_sensor = Adafruit_SI1145();//UV Light
 boolean uvInitialization = false;
 //-----------------------------------
 
@@ -194,7 +194,8 @@ void SERCOM4_Handler(){
   Serial2.IrqHandler();
 }//end SERCOM4_Handler
 
-#define openlog Serial2 //Easy identification for my Serial port
+#define openlog Serial2 //Easy identification for my Log Serial port
+#define serial openlog
 
 //======================Default Functions=============================
 
@@ -213,14 +214,15 @@ void blink(uint32_t timer, uint32_t interval){
 }//end temporizer
 
 void setup() {
+  
   pinMode(LED, OUTPUT);
   pinMode(WSPEED, INPUT_PULLUP);  // input from wind meters windspeed sensor
   pinMode(RAIN, INPUT_PULLUP);    // input from wind meters rain gauge sensor  
   pinMode(FONA_PS, INPUT);        //Power Supply Pin. It indicates whether FONA is ON or OFF
   pinMode(FONA_KEY, OUTPUT);      //Tie this pin to ground for 2 seconds to turn the module on or off. 
                                   //It's not a level signal so it isn't like "low is off, high is on"
-  pinMode(FONA_VIO, OUTPUT);      //Sets the logic level converters to right voltage. In this case 3.3v
-  digitalWrite(FONA_VIO, HIGH);
+  pinMode(FONA_VIO, OUTPUT);      //Output to stablish Fona Logic
+  digitalWrite(FONA_VIO, HIGH);   //Sets the logic level converters to right voltage. In this case 3.3v
 
   seconds = 0;
   lastSecond = millis();
@@ -239,11 +241,13 @@ void setup() {
   pinPeripheral(A2, PIO_SERCOM_ALT);  
 
   //Startup FONA in setup method;
-  if(!init_fona()){
+  if(init_fona()){
     restart(F("Serius error reported, restarting"));
   }else{
     serial.println(F("FONA configured correctly"));
   }//end if
+
+  
   print_IMEI();
 
   /*Update default timers configuration*/
@@ -260,7 +264,7 @@ void setup() {
 
   interrupts(); // turn on interrupts
   
-  if (! uv.begin()) { //Initialize SI1145. This is 
+  if (!light_sensor.begin()) { //Initialize SI1145. This is 
     #if defined(DEBUG)
     Serial.println("Didn't find Si1145");
     #endif
@@ -302,6 +306,7 @@ void loop(){
 //=======================Fona Related Functions=======================
 
 uint8_t init_fona(){
+    
   serial.print(F("Turning OFF = "));
   if(!fona_off()){
     serial.println(F("Fona is OFF"));
@@ -312,6 +317,15 @@ uint8_t init_fona(){
     serial.println(F("Fona is ON"));
   }//end if
   delay(2000);//Wait until FONA startup his Serial Port
+
+  /*
+   * I need how much time the Feather need to configure FONA
+   * it need to be less than 8s
+   * 
+   * This variable is just for testing
+  */
+  uint32_t start_time_measurement = millis();
+  
   fonaSerial.begin(4800);
   if(check_fona()){// See if the FONA is responding
     serial.println(F("Couldn't find FONA"));
@@ -319,9 +333,9 @@ uint8_t init_fona(){
   }else{
     serial.println(F("FONA Serial Port is UP"));
   }//end if
-  
+
   /*=====================APN configuration=====================
-   *Some celular provider don't need extra settings 
+   *Some celular providers don't need extra settings 
    *fona.setGPRSNetworkSettings(F(FONA_APN), F(FONA_USERNAME), F(FONA_PASSWORD));
   */
   fona.setGPRSNetworkSettings(F("kolbi3g"), F(""), F(""));
@@ -333,8 +347,22 @@ uint8_t init_fona(){
   serial.println(F("Waiting 20s.."));
   #endif
   
+  /*
+   * This variable is just for testing
+  */
+  uint32_t stop_time_measurement = millis();
+  serial.print(F("Time invested configuring the FONA 1 = "));
+  serial.println(stop_time_measurement-start_time_measurement);
+  
   delay(20000);//Wait for FONA
 
+  /*
+   * This variable is just for testing
+   * Reset counter
+  */
+  start_time_measurement = millis();
+
+  serial.println(F("Inspect Network State"));
   if(fona_network_status()){
     serial.println(F("Network problem reported"));
     return EXIT_FAILURE;
@@ -342,30 +370,41 @@ uint8_t init_fona(){
 
   /*I don't know the GPRS state*/
   serial.println("Trying to shut off GPRS");
-  if(!gprs_disable()){
-    serial.println(F("GPRS disabled"));
-  }else{
+  if(gprs_disable()){
     //If GPRS is off, then it could 
-    serial.println(F("GPRS disable failed"));
+    serial.println(F("GPRS disable failed"));    
+  }else{
+    serial.println(F("GPRS disabled"));
   }//end if
   
   serial.println(F("Trying to startup GPRS"));
-  if(!gprs_enable()){
-    serial.println(F("GPRS is ON"));
-  }else{
+  if(gprs_enable()){
     serial.println(F("GPRS ON failed"));
     return EXIT_FAILURE;
+  }else{
+    serial.println(F("GPRS is ON"));    
   }//end if
 
   //If GPS could not work
   serial.println(F("Trying to startup GPS"));
-  if(!fona_gps_on()){
-    serial.println(F("GPS is ON"));
-  }else{
+  if(fona_gps_on()){
     serial.println(F("GPS ON failed"));
-    return EXIT_FAILURE;
+    return EXIT_FAILURE;    
+  }else{
+    serial.println(F("GPS is ON"));
   }//end if
-  gpFIX();
+
+  stop_time_measurement = millis();
+  serial.print(F("Time invested configuring the FONA 2 = "));
+  serial.println(stop_time_measurement-start_time_measurement);
+   
+  serial.println(F("Waiting GPS first fix"));
+  if(fona_gps_fix()){
+    serial.println(F("Could not get first fix yet"));
+  }else{
+    serial.println(F("First Fix succed"));
+  }//end if
+  
   return EXIT_SUCCESS;
 
 }//end init_fona
@@ -410,19 +449,19 @@ uint8_t check_connection(uint32_t &timer, uint32_t interval){
 
 uint8_t fona_on(){
   while(digitalRead(FONA_PS)==LOW){//If FONA_PS still LOW, FONA is OFF
-    digitalWrite(FONA_KEY, LOW);
-    delay(2500);
-    digitalWrite(FONA_KEY, HIGH);
+    digitalWrite(FONA_KEY, !digitalRead(FONA_KEY));
+    delay(3000);
   }//end while
+  digitalWrite(FONA_KEY, HIGH);
   return EXIT_SUCCESS;
 }//end fona_on
 
 uint8_t fona_off(){
   while(digitalRead(FONA_PS)==HIGH){//If FONA_PS is HIGH the FONA still ON
-    digitalWrite(FONA_KEY, LOW);
-    delay(2500);
-    digitalWrite(FONA_KEY, HIGH);
+    digitalWrite(FONA_KEY, !digitalRead(FONA_KEY));
+    delay(3000);
   }//end while
+  digitalWrite(FONA_KEY, HIGH);
   return EXIT_SUCCESS;
 }//end fona_off
 
@@ -508,14 +547,15 @@ void print_IMEI(void){
   uint8_t imeiLen = fona.getIMEI(imei);
   if (imeiLen > 0) {
   #if defined(DEBUG)
-    #if defined(DEBUG)
     serial.print("SIM card IMEI: "); serial.println(imei);
-    #endif
   #endif
   }//end if  
 }//end print_IMEI
 
 void update_initial_state(uint32_t &timer, uint32_t interval){
+  /*
+   * The worst scenario I see is 21s sending all messages
+  */
   if((timer - previousMillis_1) > interval) {
     //noInterrupts();//<-------?????27/10/2016
   //---------Temporized code here------------
@@ -580,33 +620,19 @@ void update_initial_state(uint32_t &timer, uint32_t interval){
   //interrupts();//<-------?????27/10/2016
 }//end temporizer
 
-void gpFIX(){
-  // Initial GPS read
-  bool gpsFix = false;
-  if(fona.GPSstatus() >= 2){
-    gpsFix = true;
-  }
-  //do{
-  while(!gpsFix){
-    //gpsFix = fona.getGPS(&latitude, &longitude, &speed_kph, &heading, &altitude);
-    gpsFix = fona_gps_location();
-    //initialLatitude = latitude;
-    //initialLongitude = longitude;
-    serial.print(F("Waiting GPS fix "));
-    serial.println(txFailures);
-    delay(200);
-    if(txFailures > 200){
-      //restart(F("GPS not fix"));
-      break;
+uint8_t fona_gps_fix(){
+  /*
+   * Time to first fix 30s aprox.
+  */
+  for(uint8_t i = 0; i<200; i++){
+    fona_gps_location();
+    if(fona.GPSstatus() >= 2){
+      return EXIT_SUCCESS;
     }//end if
-    txFailures++;
-//    return gpsFix;
-  //}while(!gpsFix);
+    delay(10);
   }//end if
-  serial.println(F("Can't fix GPS"));
-  txFailures = 0; 
-//  return 0; 
-}//end gpFIX
+  return EXIT_FAILURE;
+}//end fona_gps_fix
 
 String float_to_string(float value, uint8_t places) {//Adafruit funtion
   // this is used to cast digits 
@@ -678,19 +704,30 @@ String float_to_string(float value, uint8_t places) {//Adafruit funtion
 }//end float_to_string
 
 String lightSensorRead(){
-  String ligthSensor = "";
+  String light_sensor_data = "";
   if(uvInitialization){
-    //Read SI1145 UV Light sensor
-    ligthSensor += "&visible=";
-    ligthSensor += uv.readVisible();
-    ligthSensor += "&ir=";
-    ligthSensor += uv.readIR();
-    ligthSensor += "&uv=";
-    float UVindex = uv.readUV();
+    int temporal_save = light_sensor.readVisible();
+    if(isnan(temporal_save)){
+      serial.println(F("error reading Visible light [NAN]"));
+    }else{
+      //Read SI1145 UV Light sensor
+      light_sensor_data += "&visible=";
+    }//end if
+
+    light_sensor_data += light_sensor.readVisible();
+    light_sensor_data += "&ir=";
+    light_sensor_data += light_sensor.readIR();
+    light_sensor_data += "&uv=";
+    /*
+     * the index is multiplied by 100 so to get the
+     * integer index, divide by 100!
+    */
+    float UVindex = light_sensor.readUV();
     UVindex /= 100.0; 
-    ligthSensor += UVindex;//uv.readUV();  
+    
+    light_sensor_data += UVindex;//light_sensor.readUV();  
   }//end if
-  return ligthSensor;
+  return light_sensor_data;
 }//end lightSensorRead
 
 boolean BME280Initialization(){
@@ -912,6 +949,13 @@ int send_url(String raw_paq){
     }
   }
 
+/*  char response[256];//
+  while(fona.TCPavailable()){
+    if(fona.TCPread(response, 256)){
+      serial.println(response);
+    }
+  }
+*/
   fona.TCPclose();
   //flushSerial();
   
