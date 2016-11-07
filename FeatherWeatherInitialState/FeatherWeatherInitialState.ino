@@ -59,13 +59,14 @@ Conecctions
 ------------------
   
 */
-
+#include <Arduino.h>   // required before wiring_private.h
+#include "wiring_private.h" // pinPeripheral() function
 #include <Adafruit_SleepyDog.h>
 #include "Adafruit_FONA.h"
 #include "Adafruit_SI1145.h"
 #include <SparkFunBME280.h>
-#include <Arduino.h>   // required before wiring_private.h
-#include "wiring_private.h" // pinPeripheral() function
+#include <RTCZero.h>
+
 
 #undef min
 #undef max
@@ -176,6 +177,8 @@ uint8_t txFailures = 0;//Count of how many publish failures have occured in a ro
 
 //------------------------------------------------
 
+RTCZero rtc;/* Create an rtc object */
+
 uint32_t previousMillis_1 = 0;//Save last time when Fona send a message
 uint32_t previousMillis_2 = 0;//Save last time when Fona was checked
 uint32_t time_on = 1000;//
@@ -198,6 +201,8 @@ void SERCOM4_Handler(){
 //#define serial openlog
 
 //======================Default Functions=============================
+
+void debug_print(const __FlashStringHelper *status, const __FlashStringHelper *log_message, boolean send_to_openlog = false);
 
 const uint8_t LED = 13;
 uint32_t pris = 0;  
@@ -244,7 +249,7 @@ void setup() {
   if(init_fona()){
     restart(F("Serius error reported, restarting"));
   }else{
-    serial.println(F("FONA configured correctly"));
+    debug_print(F("STATUS"),F("FONA configured correctly"));
   }//end if
 
   
@@ -266,12 +271,12 @@ void setup() {
   
   if (!light_sensor.begin()) { //Initialize SI1145. This is 
     #if defined(DEBUG)
-    serial.println("Didn't find Si1145");
+    debug_print(F("ERROR"), F("Didn't find Si1145"), true);
     #endif
   }else{
     uvInitialization = true;
     #if defined(DEBUG)
-      serial.println("Si1145 initialized");
+      debug_print(F("STATUS"), F("Si1145 initialized"), true);
     #endif
   }//end if   
   //------
@@ -296,14 +301,14 @@ void loop(){
 
 uint8_t init_fona(){
     
-  serial.print(F("Turning OFF = "));
+  debug_print(F("STATUS"), F("Turning OFF"), true);
   if(!fona_off()){
-    serial.println(F("Fona is OFF"));
+    debug_print(F("STATUS"), F("Fona is OFF"), true);
   }//end if
   delay(1000);
-  serial.print (F("Turning ON = "));
+  debug_print(F("STATUS"), F("Turning ON "), true);
   if(!fona_on()){
-    serial.println(F("Fona is ON"));
+    debug_print(F("STATUS"), F("Fona is ON"), true);
   }//end if
   delay(2000);//Wait until FONA startup his Serial Port
 
@@ -313,14 +318,14 @@ uint8_t init_fona(){
    * 
    * This variable is just for testing
   */
-  uint32_t start_time_measurement = millis();
+//  uint32_t start_time_measurement = millis();
   
   fonaSerial.begin(4800);
   if(check_fona()){// See if the FONA is responding
-    serial.println(F("Couldn't find FONA"));
+    debug_print(F("ERROR"), F("FONA serial port not responding"), true);
     return EXIT_FAILURE;
   }else{
-    serial.println(F("FONA Serial Port is UP"));
+    debug_print(F("STATUS"), F("FONA Serial Port is UP"), true);
   }//end if
 
   /*=====================APN configuration=====================
@@ -333,15 +338,15 @@ uint8_t init_fona(){
    *Otherwise FONA could not get authenticated on the network cell 
   */
   #if defined(DEBUG)
-  serial.println(F("Waiting 20s.."));
+  debug_print(F("STATUS"), F("Waiting 20s.."));
   #endif
   
   /*
    * This variable is just for testing
   */
-  uint32_t stop_time_measurement = millis();
-  serial.print(F("Time invested configuring the FONA 1 = "));
-  serial.println(stop_time_measurement-start_time_measurement);
+//  uint32_t stop_time_measurement = millis();
+//  debug_print(F("STATUS"), F("Time invested configuring the FONA 1 = "));
+//  serial.println(stop_time_measurement-start_time_measurement);
   
   delay(20000);//Wait for FONA
 
@@ -349,59 +354,61 @@ uint8_t init_fona(){
    * This variable is just for testing
    * Reset counter
   */
-  start_time_measurement = millis();
+//  start_time_measurement = millis();
 
-  serial.print(F("[CHECKING] Network State :"));
+  debug_print(F("CHECKING"), F("Network State :"), true);
   if(fona_network_status()){
-    serial.println(F("Network problem reported"));
+    debug_print(F("ERROR"), F("Network problem reported"), true);
     return EXIT_FAILURE;
-  }//end if
+  }else{
+    debug_print(F("STATUS"), F("Network OK"), true);
+  }
 
   /*I don't know the GPRS state*/
-  serial.println("Trying to shut off GPRS");
+  debug_print(F("STATUS"), F("Trying to shut off GPRS"), true);
   if(gprs_disable()){
     //If GPRS is off, then it could 
-    serial.println(F("GPRS disable failed"));    
+    debug_print(F("WARNING"), F("GPRS disable failed"), true);
   }else{
-    serial.println(F("GPRS disabled"));
+    debug_print(F("STATUS"), F("GPRS disabled"), true);
   }//end if
   
-  serial.println(F("Trying to startup GPRS"));
+  debug_print(F("STATUS"), F("Trying to startup GPRS"), true);
   if(gprs_enable()){
-    serial.println(F("GPRS ON failed"));
+    debug_print(F("ERROR"), F("GPRS ON failed"), true);
     return EXIT_FAILURE;
   }else{
-    serial.println(F("GPRS is ON"));    
+    debug_print(F("STATUS"), F("GPRS is ON"), true);
   }//end if
 
-  serial.print(F("Synced with NTP servers : "));
+  debug_print(F("STATUS"), F("Synced RTC with NTP servers "), true);
   if(fona_sync_ntp()){
-    serial.println(F("Failed to enable NTP sync"));
+    debug_print(F("WARNING"), F("Failed to enable NTP sync"), true);
   }else{
-    serial.println(F("OK"));
     char buffer[23];
-    fona.getTime(buffer, 23);  // make sure replybuffer is at least 23 bytes!
-    Serial.print(F("Time = ")); Serial.println(buffer);    
+    fona.getTime(buffer, 23);  // make sure replybuffer is at least 23 bytes! 
+    rtc_m0_config(buffer);//SEND BUFFER TO SINCRONIZE RTC
+    debug_print(F("STATUS"), F("RTC synchronized"), true);    
   }//end if
 
   //If GPS could not work
-  serial.println(F("Trying to startup GPS"));
+  debug_print(F("STATUS"), F("Trying to startup GPS"), true);
   if(fona_gps_on()){
-    serial.println(F("GPS ON failed"));
+    debug_print(F("ERROR"), F("GPS ON failed"), true);
     return EXIT_FAILURE;    
   }else{
-    serial.println(F("GPS is ON"));
+    debug_print(F("STATUS"), F("GPS is ON"), true);
   }//end if
 
-  stop_time_measurement = millis();
-  serial.print(F("Time invested configuring the FONA 2 = "));
-  serial.println(stop_time_measurement-start_time_measurement);
+//  stop_time_measurement = millis();
+//  debug_print(F("STATUS"), F("Time invested configuring the FONA 2 = "));
+//  serial.println(stop_time_measurement-start_time_measurement);
    
-  /*serial.println(F("Waiting GPS first fix"));
+  /*debug_print(F("Waiting GPS first fix"));
   if(fona_gps_fix()){
-    serial.println(F("Could not get first fix yet"));
+    debug_print(F("Could not get first fix yet"));
   }else{
-    serial.println(F("First Fix succed"));
+    debug_print(F("First Fix succed"));
   }//end if*/
   
   return EXIT_SUCCESS;
@@ -419,26 +426,28 @@ uint8_t check_fona(){
 uint8_t check_connection(uint32_t &timer, uint32_t interval){
   //noInterrupts();//<-------?????27/10/2016
   if(timer - previousMillis_2 > interval) {
-    serial.print(F("[CHECKING] Network state : "));
+    debug_print(F("CHECKING"), F("Network state : "));
     if(fona_network_status()){
-      serial.println(F("Network problem reported"));
+      debug_print(F("ERROR"), F("Network problem reported"), true);
       init_fona();
-    }//end if
+    }else{
+      debug_print(F("STATUS"), F("Network ok"), 1);
+    }
 
-    serial.print(F("[CHECKING] GPRS state : "));
+    debug_print(F("CHECKING"), F("GPRS state : "), true);
     if(!fona.GPRSstate()){
-      serial.println(F("GPRS problem reported"));
+      debug_print(F("ERROR"), F("GPRS problem reported"), true);
       init_fona();
     }else{
-      serial.println(F("OK"));
+      debug_print(F("STATUS"), F("GPRS OK"), true);
     }//end if
 
-    serial.print(F("[CHECKING] Transmitions failures limits : "));
+    debug_print(F("CHECKING"), F("Transmitions failures limits : "), true);
     if(txFailures >= MAX_TX_FAILURES){
-      serial.println(F("Maximum transmition failures reached"));
+      debug_print(F("ERROR"), F("Maximum transmition failures reached"), true);
       init_fona();
     }else{
-      serial.println(F("OK"));
+      debug_print(F("STATUS"), F("Not reached"), true);
     }//end if
     previousMillis_2 = timer;
   }//end if
@@ -474,22 +483,22 @@ uint8_t fona_off(){
 uint8_t fona_network_status(){
   uint8_t network_status = fona.getNetworkStatus();
   if(network_status == 0){
-    serial.println(F("Not registered"));
+    debug_print(F("WARNING"), F("Not registered"), true);
     return EXIT_FAILURE;    
   }else if(network_status == 1){
-    serial.println(F("Registered (home)"));
+    debug_print(F("STATUS"), F("Registered (home)"), true);
     return EXIT_SUCCESS;
   }else if(network_status == 2){
-    serial.println(F("Not registered (searching)"));
+    debug_print(F("WARNING"), F("Not registered (searching)"), true);
     return EXIT_FAILURE;    
   }else if(network_status == 3){
-    serial.println(F("Denied"));
+    debug_print(F("ERROR"), F("Denied"), true);
     return EXIT_FAILURE;        
   }else if(network_status == 4){
-    serial.println(F("Unknown"));
+    debug_print(F("WARNING"), F("Unknown"), true);
     return EXIT_FAILURE;        
   }else if(network_status == 5){
-    serial.println(F("Registered roaming"));
+    debug_print(F("WARNING"), F("Registered roaming"), true);
     return EXIT_FAILURE;        
   }//end if
 }//end fona_network_status
@@ -560,9 +569,7 @@ void print_IMEI(void){
   char imei[15] = {0}; // MUST use a 16 character buffer for IMEI!
   uint8_t imeiLen = fona.getIMEI(imei);
   if (imeiLen > 0) {
-  #if defined(DEBUG)
-    serial.print("SIM card IMEI: "); serial.println(imei);
-  #endif
+    debug_print(F("SIM card IMEI: "), F(imei));
   }//end if  
 }//end print_IMEI
 
@@ -588,7 +595,7 @@ void update_initial_state(uint32_t &timer, uint32_t interval){
 
   if(GPSlocation != ""){
     if(send_url(GPSlocation)){
-      serial.println("Problem sending GPS location data");
+      debug_print(F("WARNING"), F("Problem sending GPS location data"), true);
       txFailures++;
     }else{
       txFailures = 0;  
@@ -604,7 +611,7 @@ void update_initial_state(uint32_t &timer, uint32_t interval){
   }//end if
 
   if(send_url(BME280Data)){
-    serial.println("Problem sending BME280 data");
+    debug_print(F("WARNING"), F("Problem sending BME280 data"), true);
     txFailures++;
   }else{
     txFailures = 0;  
@@ -615,7 +622,7 @@ void update_initial_state(uint32_t &timer, uint32_t interval){
   sprintf(weatherConditions, "&wind=%s&windSpeed=%s&rainin=%s&dailyrainin=%s", String(winddir_avg2m).c_str(), float_to_string(windspdmph_avg2m, 2).c_str(), float_to_string(rainin, 2).c_str(), float_to_string(dailyrainin, 2).c_str());
 
   if(send_url(weatherConditions)){
-    serial.println("Problem sending Weather Conditions");
+    debug_print(F("WARNING"), F("Problem sending Weather Conditions"), true);
     txFailures++;
   }else{
     txFailures = 0;  
@@ -623,7 +630,7 @@ void update_initial_state(uint32_t &timer, uint32_t interval){
   
   String testMessage = "&battery="+String(fona_get_battery()) + lightSensorRead();
   if(send_url(testMessage.c_str())){
-    serial.println("Problem sending Battery State");
+    debug_print(F("WARNING"), F("Problem sending Battery State"), true);
     txFailures++;
   }else{
     txFailures = 0;  
@@ -653,7 +660,7 @@ String lightSensorRead(){
   if(uvInitialization){
     uint16_t temporal_save = light_sensor.readVisible();
     if(isnan(temporal_save)){
-      serial.println(F("error reading Visible light [NAN]"));
+      debug_print(F("ERROR"), F("Reading Visible light [NAN]"), true);
     }else{
       //Read SI1145 UV Light
       light_sensor_data += "&visible=";
@@ -662,7 +669,7 @@ String lightSensorRead(){
 
     temporal_save = light_sensor.readIR();
     if(isnan(temporal_save)){
-      serial.println(F("error reading InfraRed light [NAN]"));
+      debug_print(F("ERROR"), F("Reading InfraRed light [NAN]"), true);
     }else{
       //Read SI1145 InfraRed Light
       light_sensor_data += "&ir=";
@@ -671,7 +678,7 @@ String lightSensorRead(){
     
     temporal_save = light_sensor.readUV();
     if(isnan(temporal_save)){
-      serial.println(F("error reading InfraRed light [NAN]"));
+      debug_print(F("ERROR"), F("error reading InfraRed light [NAN]"), true);
     }else{
       //Read SI1145 UV Light
       light_sensor_data += "&uv=";
@@ -734,8 +741,9 @@ boolean BME280Initialization(){
   weatherSensor.settings.pressOverSample = 1;
   weatherSensor.settings.humidOverSample = 1;
 
-  delay(10);//Make sure sensor had enough time to turn on. BME280 requires 2ms to start up.  
-  Serial.println(weatherSensor.begin());//Calling .begin() causes the settings to be loaded
+  delay(10);//Make sure sensor had enough time to turn on. BME280 requires 2ms to start up.
+   
+  serial.println(weatherSensor.begin());//Calling .begin() causes the settings to be loaded
   //---------
   return true;
 }//end BME280Initialization
@@ -746,19 +754,19 @@ void BME280Read(){
   */
   bmpTemperature = weatherSensor.readTempC();
   if(isnan(bmpTemperature)){
-    serial.println(F("error reading Temperature [NAN]"));
+    debug_print(F("ERROR"), F("Reading Temperature [NAN]"), true);
   }//end if
   bmpPressure =weatherSensor.readFloatPressure();
   if(isnan(bmpPressure)){
-    serial.println(F("error reading Pressure [NAN]"));
+    debug_print(F("ERROR"), F("Reading Pressure [NAN]"), true);
   }//end if  
   bmpAltitude = weatherSensor.readFloatAltitudeMeters();
   if(isnan(bmpAltitude)){
-    serial.println(F("error reading Altitude [NAN]"));
+    debug_print(F("ERROR"), F("Reading Altitude [NAN]"), true);
   }//end if
   bmpHumidity = weatherSensor.readFloatHumidity();
   if(isnan(bmpHumidity)){
-    serial.println(F("error reading Humidity [NAN]"));
+    debug_print(F("ERROR"), F("error reading Humidity [NAN]"), true);
   }//end if
 }//end bmp085Read
 
@@ -875,6 +883,41 @@ void calcWeather(){
     rainin += rainHour[i];
 }//end calcWeather
 
+uint8_t *fona_ntp_time_sync(const char *fona_time){
+  //Split time format from FONA for configure in M0 RTC
+  uint8_t date_numbers[6];//year, month, day, hour, minute, second
+  uint8_t i = 1;
+  for(uint8_t j= 0; j < 6; j++){
+    char number[2];
+    for(uint8_t k = 0; k < 3; k++){
+      if(k == 2){//skip third caracter
+        i++;
+        break;
+      }//end if
+      number[k] = fona_time[i];
+      i++;
+    }//end for
+    date_numbers[j] = atoi(number);//Convert chars to unsigned int
+  }//end for
+  return date_numbers;//Return array with date numbers
+}//end fona_ntp_time
+
+uint8_t rtc_m0_config(const char *fona_time){
+  uint8_t calendar_time[6];//year, month, day, hour, minute, second
+  memcpy(calendar_time,  fona_ntp_time_sync(fona_time), 6);//Move array of number 
+  rtc.begin(true); // initialize RTC, always configure
+  rtc.setDate(calendar_time[2], calendar_time[1], calendar_time[0]);//Set Date day, month, year
+  rtc.setTime(calendar_time[3], calendar_time[4], calendar_time[5]);//Set Time hours, minutes, seconds
+  return EXIT_SUCCESS;
+}//end rtc_m0_config
+
+void flushSerial() {
+  #if defined(DEBUG)
+  while (serial.available()) 
+    serial.read();
+  #endif
+}//end flushSerial
+
 String float_to_string(float value, uint8_t places) {//Adafruit funtion
   // this is used to cast digits 
   int digit;
@@ -884,24 +927,28 @@ String float_to_string(float value, uint8_t places) {//Adafruit funtion
   float tempfloat = value;
   String float_obj = "";
 
-    // make sure we round properly. this could use pow from <math.h>, but doesn't seem worth the import
-  // if this rounding step isn't here, the value  54.321 prints as 54.3209
+  /*
+   * Make sure we round properly. this could use pow from <math.h>, but doesn't seem worth the import 
+   * if this rounding step isn't here, the value  54.321 prints as 54.3209
+  */
 
   // calculate rounding term d:   0.5/pow(10,places)  
   float d = 0.5;
   if (value < 0){
     d *= -1.0;
   }
-  // divide by ten for each decimal place
-  for (uint8_t i = 0; i < places; i++){
+  
+  for (uint8_t i = 0; i < places; i++){       // divide by ten for each decimal place
     d/= 10.0;
   }
   // this small addition, combined with truncation will round our values properly 
   tempfloat +=  d;
 
-  // first get value tens to be the large power of ten less than value
-  // tenscount isn't necessary but it would be useful if you wanted to know after this how many chars the number will take
-
+  /*First get value tens to be the large power of ten less than value 
+   * tenscount isn't necessary but it would be useful if you wanted to know 
+   * after this how many chars the number will take
+  */
+  
   if (value < 0){
     tempfloat *= -1.0;
   }
@@ -909,8 +956,8 @@ String float_to_string(float value, uint8_t places) {//Adafruit funtion
     tens *= 10.0;
     tenscount += 1;
   }
-  // write out the negative if needed
-  if (value < 0){
+  
+  if (value < 0){                             //Write out the negative if needed
     float_obj += "-";
   }//en if
   
@@ -924,16 +971,17 @@ String float_to_string(float value, uint8_t places) {//Adafruit funtion
     tempfloat = tempfloat - ((float)digit * tens);
     tens /= 10.0;
   }//en for
-
-  // if no places after decimal, stop now and return
-  if (places <= 0){
+  
+  if (places <= 0){                          //If no places after decimal, stop now and return
     return float_obj;
   }//end if
+  
+  float_obj += ".";                          //Otherwise, write the point and continue on
 
-  // otherwise, write the point and continue on
-  float_obj += ".";
-
-  // now write out each decimal place by shifting digits one by one into the ones place and writing the truncated value
+  /*
+   * Now write out each decimal place by shifting digits one by one into 
+   * the ones place and writing the truncated value
+   */
   for (uint8_t i = 0; i < places; i++) {
     tempfloat *= 10.0; 
     digit = (int) tempfloat;
@@ -944,19 +992,12 @@ String float_to_string(float value, uint8_t places) {//Adafruit funtion
   return float_obj;
 }//end float_to_string
 
-void flushSerial() {
-  #if defined(DEBUG)
-  while (serial.available()) 
-    serial.read();
-  #endif
-}//end flushSerial
-
 void restart(const __FlashStringHelper *error) {
-  serial.println(error);
-  delay(1000);//Wait 1s for print pending message
+  debug_print(F("RESETING"), F(error), true);                //Print message error 
+  delay(1000);                          //Wait 1s for print pending message
   Watchdog.enable(1000);
   Watchdog.reset();
-  while (1) {}
+  while (1) {}                          //Wait "forever" until watchdog restart M0
 }//end restart
 
 //==========================Web Functions=============================
@@ -971,26 +1012,21 @@ uint8_t send_url(const char *raw_paq){
   char c_url[800];
   sprintf(c_url, "%s%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", url.c_str(), raw_paq, SERVER);
 
-  // if there's a successful connection:
-  if (fona.TCPconnect(SERVER, 80)) {
-    Serial.println("connecting...");
-    // Make a HTTP request:
+  if (fona.TCPconnect(SERVER, 80)) {         // if there's a successful connection:
+    debug_print(F("STATUS"), F("Connecting with InitialState"), true);
     
-    if(fona.TCPconnected()){
-        Serial.println(F("Sending"));
-        serial.println(c_url);
+    if(fona.TCPconnected()){                 // Make a HTTP request:
+        debug_print(F("STATUS"), F("Sending"), true);
+        debug_print(F("SENDING"), F(c_url), true);
         fona.TCPsend(c_url, strlen(c_url));
     }else {
-      // if you couldn't make a connection:
-      serial.println("ERROR connecting");
-      txFailures++;
       return EXIT_FAILURE;
     }//end if
   }
-  delay(50);//Wait a little for website response
+  delay(50);                                 //Wait a little for website response
   
   uint8_t max_buffer = 255;
-  uint8_t response[max_buffer];//The response could not be greather than 255 because TCPread() can't parse more than that
+  uint8_t response[max_buffer];              //The response could not be greather than 255 because TCPread() can't parse more than that
   uint16_t avail;
 
   while(avail = fona.TCPavailable()){
@@ -1002,18 +1038,32 @@ uint8_t send_url(const char *raw_paq){
   /*Print Response message
    * A 204 response 
   */
-  serial.println(F("Initial State Response :"));
-  for(uint8_t i = 0; i< max_buffer; i++){
-    if(response[i] == '\0'){
-      break;
-    }//end if
-    serial.print((char)response[i]);
-  }//end for
-  serial.println();
+  debug_print(F("STATUS"), F("Initial State Response :"), true);
+//  for(uint8_t i = 0; i< max_buffer; i++){
+//    if(response[i] == '\0'){
+//      break;
+//    }//end if
+  debug_print(F("ANSWER"), F(response), true);
+//  }//end for
+//  debug_print();
   
-  fona.TCPclose();//Close TCP connection with InitialState
+  fona.TCPclose();                           //Close TCP connection with InitialState
   return EXIT_SUCCESS;
 }//end send_url
+
+void debug_print(const __FlashStringHelper *status, const __FlashStringHelper *log_message, boolean send_to_openlog){
+  char status_message[280];//Maximum char spected is 252, but include a little more
+  /*
+   * Set correct format for all message, if they go to openlog or not
+   * Include RTC time in all messages
+  */
+  sprintf(status_message, "[%s] [%d/%d/%d - %d:%d:%d] : %s", status, rtc.getDay(), rtc.getMonth(), \
+  rtc.getYear(), rtc.getHours(), rtc.getMinutes(), rtc.getSeconds(), log_message);
+  serial.println(F(status_message));
+  if(send_to_openlog){
+    openlog.println(F(status_message));
+  }//end if
+}//end debug_print
 
 //==========================Interrupt routines========================
 void rainIRQ(){
